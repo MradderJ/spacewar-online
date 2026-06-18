@@ -120,7 +120,17 @@ function connectWs(onOpen) {
         resetGame();
         break;
       case 'opponent_input':
-        opponentKeys = msg.keys || {};
+        if (msg.state) {
+          const s = msg.state;
+          p2.x = s.x; p2.y = s.y; p2.vx = s.vx; p2.vy = s.vy; p2.angle = s.angle;
+          p2.hp = s.hp; p2.torpedoes = s.torpedoes; p2.fuel = s.fuel;
+          p2.alive = s.alive; p2.fired = s.fired;
+          // Ersätt P2:s torpeder med mottagna
+          torps = torps.filter(t => t.owner !== p2);
+          if (s.torps) s.torps.forEach(t => {
+            torps.push({ x: t.x, y: t.y, vx: t.vx, vy: t.vy, life: t.life, owner: p2 });
+          });
+        }
         break;
       case 'opponent_disconnected':
         document.getElementById('connect-status').textContent = '🔴 Opponent disconnected';
@@ -143,8 +153,17 @@ function connectWs(onOpen) {
 
 function sendInput() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  const state = { a:!!keys['a'], d:!!keys['d'], w:!!keys['w'], space:!!keys[' '], x:!!keys['x'] };
-  ws.send(JSON.stringify({ type: 'input', keys: state }));
+  // Skicka hela P1:s state + P1:s torpeder
+  const p1torps = torps.filter(t => t.owner === p1).map(t => ({
+    x: t.x, y: t.y, vx: t.vx, vy: t.vy, life: t.life
+  }));
+  const state = {
+    x: p1.x, y: p1.y, vx: p1.vx, vy: p1.vy, angle: p1.angle,
+    hp: p1.hp, torpedoes: p1.torpedoes, fuel: p1.fuel,
+    alive: p1.alive, fired: p1.fired,
+    torps: p1torps
+  };
+  ws.send(JSON.stringify({ type: 'input', state }));
 }
 
 // ── Menu handlers ──
@@ -428,16 +447,9 @@ function step(dt) {
   }
   p1.laserCD -= dt; if (p1.laserTimer > 0) p1.laserTimer -= dt; else p1.laserActive = false;
 
-  // P2: online → from network, local → keyboard or AI
-  if (p2.alive) {
-    if (onlineMode) {
-      if (opponentKeys.a) p2.angle -= ROT_SPEED*dt;
-      if (opponentKeys.d) p2.angle += ROT_SPEED*dt;
-      p2.angle = normAngle(p2.angle);
-      if (opponentKeys.w && p2.fuel>0) { p2.vx += Math.cos(p2.angle)*THRUST*dt; p2.vy += Math.sin(p2.angle)*THRUST*dt; p2.fuel -= 10*dt; }
-      if (opponentKeys.space) { if(!p2.fired){fire(p2);p2.fired=true;} } else p2.fired=false;
-      if (opponentKeys.x) fireLaser(p2);
-    } else {
+  // P2: i online-läge styrs helt från nätverk (state skickas), lokalt via tangent/AI
+  if (!onlineMode) {
+    if (p2.alive) {
       if (keys['j']) p2.angle -= ROT_SPEED*dt;
       if (keys['l']) p2.angle += ROT_SPEED*dt;
       p2.angle = normAngle(p2.angle);
@@ -445,8 +457,8 @@ function step(dt) {
       if (keys['k']) { if(!p2.fired){fire(p2);p2.fired=true;} } else p2.fired=false;
       if (keys['u']) fireLaser(p2);
     }
+    if (!p2Human) updateAI(p2, dt);
   }
-  if (!onlineMode && !p2Human) updateAI(p2, dt);
   p2.laserCD -= dt; if (p2.laserTimer > 0) p2.laserTimer -= dt; else p2.laserActive = false;
 
   // Physics
@@ -680,9 +692,8 @@ function render() {
 
   const p1thrust = p1.alive && (keys['w']||keys['arrowup']) && p1.fuel>0;
   const p2thrust = p2.alive && (
-    onlineMode ? (opponentKeys.w || false)
-    : p2Human ? keys['i']
-    : p2.aiThrusting
+    !onlineMode ? (p2Human ? keys['i'] : p2.aiThrusting)
+    : false
   ) && p2.fuel>0;
 
   // ── Background stars (långsam rotation + flash) ──
