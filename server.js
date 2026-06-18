@@ -77,20 +77,22 @@ wss.on('connection', (ws) => {
         room.guest = ws;
         playerRoom = code;
         playerRole = 'guest';
+        // Generera gemensamt frö för deterministisk slump
+        const seed = Math.floor(Math.random() * 2147483647);
         // Notify both players
-        room.host.send(JSON.stringify({ type: 'matched', role: 'host' }));
-        ws.send(JSON.stringify({ type: 'matched', role: 'guest' }));
+        room.host.send(JSON.stringify({ type: 'matched', role: 'host', seed }));
+        ws.send(JSON.stringify({ type: 'matched', role: 'guest', seed }));
         console.log(`Player joined room ${code}`);
         break;
       }
 
       case 'input': {
-        // Forward keyboard input to the opponent
+        // Forward game state to the opponent
         const room = rooms[playerRoom];
         if (!room) return;
         const target = playerRole === 'host' ? room.guest : room.host;
         if (target && target.readyState === WebSocket.OPEN) {
-          target.send(JSON.stringify({ type: 'opponent_input', keys: msg.keys }));
+          target.send(JSON.stringify({ type: 'opponent_input', state: msg.state }));
         }
         break;
       }
