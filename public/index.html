@@ -381,20 +381,40 @@ function updateAI(ship, dt) {
 }
 
 // ── Main loop ──
+const FIXED_DT = 1/60;  // 60 Hz fast tidssteg
+let accumulator = 0;
 function tick(time) {
   const rawDt = (time - last) / 1000;
-  const dt = isFinite(rawDt) ? Math.max(0, Math.min(rawDt, 0.04)) : 0;
+  const dt = isFinite(rawDt) ? Math.max(0, Math.min(rawDt, 0.05)) : 0;
   last = time;
 
-  // Send input in online mode
+  // Send input in online mode (varje frame, oavsett fysiktakt)
   if (onlineMode && ws && ws.readyState === WebSocket.OPEN) sendInput();
 
   // Om menyn visas, hoppa över fysiken
   const menuHidden = document.getElementById('menu').classList.contains('hidden');
 
-  if (gameOver) { goTimer -= dt; if (goTimer<=0) resetRound(); else { render(false, false); requestAnimationFrame(tick); return; } }
-  if (!menuHidden) { render(false, false); requestAnimationFrame(tick); return; }
+  if (gameOver) { goTimer -= dt; if (goTimer<=0) resetRound(); else { render(); requestAnimationFrame(tick); return; } }
+  if (!menuHidden) { render(); requestAnimationFrame(tick); return; }
 
+  // Fast tidssteg: ackumulera tid, kör flera steg om det behövs
+  accumulator += dt;
+  const maxSteps = 5;  // skydda mot spiral of death
+  let steps = 0;
+  while (accumulator >= FIXED_DT && steps < maxSteps) {
+    step(FIXED_DT);
+    accumulator -= FIXED_DT;
+    steps++;
+  }
+  // Om vi ligger efter, kasta bort resten
+  if (accumulator > FIXED_DT) accumulator = 0;
+
+  render();
+  requestAnimationFrame(tick);
+}
+
+// Fysiksteg — körs med FIXED_DT
+function step(dt) {
   const normAngle = (a) => ((a + Math.PI) % (2*Math.PI)) - Math.PI;
 
   // P1 input (always local)
@@ -647,19 +667,23 @@ function tick(time) {
     else { x=Math.random()*W; y=H+20; vx=(Math.random()-0.5)*spd*0.5; vy=-spd; }
     comets.push({x,y,vx,vy, r:1.5+Math.random()*2, life:1.5+Math.random()*2, color:['#ff8','#f80','#8ff','#f88'][Math.floor(Math.random()*4)]});
   }
-
-  render(p1thrust, p2thrust);
-  requestAnimationFrame(tick);
 }
 
 // ── Render ──
-function render(p1thrust = false, p2thrust = false) {
+function render() {
   ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
 
   // Om menyn visas, ingen bakgrundsrendering
   if (document.getElementById('menu') && !document.getElementById('menu').classList.contains('hidden')) {
     return;
   }
+
+  const p1thrust = p1.alive && (keys['w']||keys['arrowup']) && p1.fuel>0;
+  const p2thrust = p2.alive && (
+    onlineMode ? (opponentKeys.w || false)
+    : p2Human ? keys['i']
+    : p2.aiThrusting
+  ) && p2.fuel>0;
 
   // ── Background stars (långsam rotation + flash) ──
   for (const s of bgStars) {
