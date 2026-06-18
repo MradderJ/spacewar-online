@@ -48,7 +48,7 @@
 <div id="menu">
   <h1>SPACEWAR!</h1>
   <h2>— orbital combat —</h2>
-  <p style="color:#f44; font-size:12px; margin-top:-30px; margin-bottom:28px;">by Jim</p>
+  <p style="color:#444; font-size:11px; margin-top:-26px; margin-bottom:26px;">by Jim · v1.8</p>
   <div id="menu-main">
     <button onclick="startLocal()">👤 LOCAL PLAY</button>
     <button onclick="showHost()">🌐 HOST ONLINE</button>
@@ -533,25 +533,26 @@ function step(dt) {
       const e=ship===p1?p2:p1; if (e.alive) e.score++; endRound();
     }
 
-    // Ship-to-ship collision
-    const other = ship === p1 ? p2 : p1;
-    if (ship.alive && other.alive) {
-      const dx = ship.x - other.x, dy = ship.y - other.y;
+    // Ship-to-ship collision (körs bara en gång, för P1)
+    if (ship === p1 && p1.alive && p2.alive) {
+      const dx = p1.x - p2.x, dy = p1.y - p2.y;
       const dist = Math.hypot(dx, dy);
-      const minDist = ship.radius + other.radius + 2;
-      if (dist < minDist) {
-        // Båda tar skada
-        ship.hp -= 2; other.hp -= 2;
-        // Studsa isär
-        const nx = dx/dist || 1, ny = dy/dist || 0;
+      const minDist = SHIP_R * 2 + 4;
+      if (dist < minDist && dist > 0.1) {
+        p1.hp -= 2; p2.hp -= 2;
+        const nx = dx/dist, ny = dy/dist;
         const overlap = (minDist - dist) / 2;
-        ship.x += nx * overlap; ship.y += ny * overlap;
-        other.x -= nx * overlap; other.y -= ny * overlap;
-        // Gnistregn
-        for (let k=0; k<3; k++) explode((ship.x+other.x)/2, (ship.y+other.y)/2, '#ff0', 10);
-        // Kolla om någon dog
-        if (ship.hp <= 0) { ship.alive = false; explode(ship.x,ship.y,ship.color,25); other.score++; endRound(); }
-        if (other.hp <= 0) { other.alive = false; explode(other.x,other.y,other.color,25); ship.score++; endRound(); }
+        p1.x += nx * overlap; p1.y += ny * overlap;
+        p2.x -= nx * overlap; p2.y -= ny * overlap;
+        // Vänd hastigheterna (elastisk stöt)
+        const relV = (p1.vx - p2.vx) * nx + (p1.vy - p2.vy) * ny;
+        if (relV < 0) {
+          p1.vx -= relV * nx; p1.vy -= relV * ny;
+          p2.vx += relV * nx; p2.vy += relV * ny;
+        }
+        for (let k=0; k<3; k++) explode((p1.x+p2.x)/2, (p1.y+p2.y)/2, '#ff0', 10);
+        if (p1.hp <= 0) { p1.alive = false; explode(p1.x,p1.y,p1.color,25); p2.score++; endRound(); }
+        if (p2.hp <= 0) { p2.alive = false; explode(p2.x,p2.y,p2.color,25); p1.score++; endRound(); }
       }
     }
   }
