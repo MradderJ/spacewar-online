@@ -255,7 +255,8 @@ function makeShip(x,y,angle,color,name) {
   return { x,y, vx:0, vy:0, angle, color, name, radius:SHIP_R,
     fuel:MAX_FUEL, torpedoes:MAX_TORP, hp:5, maxHp:5, alive:true, score:0,
     fired:false, aiThrusting:false, laserCD:0, laserActive:false, laserTimer:0, trail:[],
-    laserBuff: 0  // 0 = normal, >0 = grön laser x2 längd
+    laserBuff: 0,  // 0 = normal, >0 = grön laser x2 längd
+    invuln: 1.0  // osårbar första sekunden
   };
 }
 
@@ -277,11 +278,12 @@ let roundCount = 0;  // räknare för var 6:e omgång
 let cheatSeq = [];  // 888-koden
 
 function resetGame() {
-  gameOver = false; goTimer = 0; last = performance.now();  // sätt last till aktuell tid
+  gameOver = false; goTimer = 0; last = performance.now();
   p2Human = false;
   const s1 = p1 ? p1.score : 0, s2 = p2 ? p2.score : 0;
   p1 = makeShip(450 + ORBIT_R, 350, -Math.PI/2, '#0ff', 'P1');
   p1.vx = 0; p1.vy = -orbitVel(ORBIT_R); p1.score = s1;
+  p1.hp = 5;
   p2 = makeShip(450 - ORBIT_R, 350, Math.PI/2, '#f44', 'P2');
   p2.vx = 0; p2.vy = orbitVel(ORBIT_R); p2.score = s2;
   torps = []; debris = []; comets = []; flashTimer = 0; starAngle = 0;
@@ -395,9 +397,9 @@ function endRound() {
 function resetRound() {
   const s1 = p1.score, s2 = p2.score;
   p1 = makeShip(450+ORBIT_R, 350, -Math.PI/2, '#0ff', 'P1');
-  p1.vx = 0; p1.vy = -orbitVel(ORBIT_R); p1.score = s1;
+  p1.vx = 0; p1.vy = -orbitVel(ORBIT_R); p1.score = s1; p1.hp = 5;
   p2 = makeShip(450-ORBIT_R, 350, Math.PI/2, '#f44', 'P2');
-  p2.vx = 0; p2.vy = orbitVel(ORBIT_R); p2.score = s2;
+  p2.vx = 0; p2.vy = orbitVel(ORBIT_R); p2.score = s2; p2.hp = 5;
   torps = []; debris = []; p2Human = false; gameOver = false;
 }
 
@@ -487,6 +489,9 @@ function step(dt) {
     if (!p2Human) updateAI(p2, dt);
   }
   p2.laserCD -= dt; if (p2.laserTimer > 0) p2.laserTimer -= dt; else p2.laserActive = false;
+  // Invulnerability timer
+  if (p1.invuln > 0) p1.invuln -= dt;
+  if (p2.invuln > 0) p2.invuln -= dt;
 
   // Physics
   const p1thrust = p1.alive && (keys['w']||keys['arrowup']) && p1.fuel>0;
@@ -521,7 +526,7 @@ function step(dt) {
       }
     }
 
-    if (tooCloseToStar(ship.x, ship.y)) {
+    if (tooCloseToStar(ship.x, ship.y) && ship.invuln <= 0) {
       ship.alive = false;
       // Rejäl krasch — massor av partiklar
       for (let k=0; k<5; k++) explode(ship.x, ship.y, '#f80', 20);
@@ -533,8 +538,8 @@ function step(dt) {
       const e=ship===p1?p2:p1; if (e.alive) e.score++; endRound();
     }
 
-    // Ship-to-ship collision (körs bara en gång, för P1)
-    if (ship === p1 && p1.alive && p2.alive) {
+    // Ship-to-ship collision (körs bara en gång, för P1, hoppar om nån är osårbar)
+    if (ship === p1 && p1.alive && p2.alive && p1.invuln <= 0 && p2.invuln <= 0) {
       const dx = p1.x - p2.x, dy = p1.y - p2.y;
       const dist = Math.hypot(dx, dy);
       const minDist = SHIP_R * 2 + 4;
@@ -836,7 +841,9 @@ function render() {
   // Ships
   for (const ship of [p1, p2]) {
     if (!ship.alive) continue;
-    const bw=30,bh=4,bx=ship.x-bw/2,by=ship.y-ship.radius-10;
+
+    // Health bar above ship
+    const bw=28,bh=4,bx=ship.x-bw/2,by=ship.y-ship.radius-10;
     ctx.fillStyle='#300'; ctx.fillRect(bx,by,bw,bh);
     const hpR = Math.max(0, ship.hp/ship.maxHp);
     ctx.fillStyle = hpR>0.5?'#0f0':hpR>0.25?'#ff0':'#f00';
@@ -908,28 +915,29 @@ function render() {
   ctx.fillStyle = '#444'; ctx.font = '10px monospace'; ctx.textAlign = 'left';
   ctx.fillText('by Jim', 10, H - 10);
 
-  // Bränsleindikatorer — stor och tydlig för båda skeppen
-  ctx.font = '8px monospace'; ctx.textAlign = 'center';
-  const fuelW = 80, fuelH = 10;
-  // P1
-  ctx.fillStyle = '#111'; ctx.fillRect(50, 95, fuelW, fuelH);
-  ctx.strokeStyle = '#0ff'; ctx.lineWidth = 1; ctx.strokeRect(50, 95, fuelW, fuelH);
-  ctx.fillStyle = p1.fuel > 30 ? '#0ff' : '#f00';
-  ctx.fillRect(51, 96, (fuelW-2) * Math.max(0, p1.fuel / MAX_FUEL), fuelH-2);
-  ctx.fillStyle = '#0ff'; ctx.fillText('FUEL', 50 + fuelW/2, 93);
-  ctx.fillStyle = '#0ff'; ctx.font = 'bold 9px monospace';
-  ctx.fillText(Math.floor(p1.fuel) + '%', 50 + fuelW/2, 104);
+  // Bränsle- och HP-indikatorer
+  ctx.font = '7px monospace'; ctx.textAlign = 'center';
+  const barW = 72, barH = 6, gap = 1;
+  
+  function drawBar(x, y, w, val, maxVal, color, label) {
+    ctx.fillStyle = '#111'; ctx.fillRect(x, y, w, barH);
+    ctx.fillStyle = val > 0 ? color : '#222';
+    ctx.fillRect(x+1, y+1, (w-2) * Math.max(0, val/maxVal), barH-2);
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 1; ctx.strokeRect(x, y, w, barH);
+    ctx.fillStyle = '#555'; ctx.font = '6px monospace';
+    ctx.fillText(label, x + w/2, y + barH + 8);
+  }
 
-  // P2
-  const p2x = W - 50 - fuelW;
-  ctx.fillStyle = '#111'; ctx.fillRect(p2x, 95, fuelW, fuelH);
-  ctx.strokeStyle = '#f44'; ctx.lineWidth = 1; ctx.strokeRect(p2x, 95, fuelW, fuelH);
-  ctx.fillStyle = p2.fuel > 30 ? '#f44' : '#f00';
-  ctx.fillRect(p2x+1, 96, (fuelW-2) * Math.max(0, p2.fuel / MAX_FUEL), fuelH-2);
-  ctx.fillStyle = '#f44'; ctx.font = '8px monospace';
-  ctx.fillText('FUEL', p2x + fuelW/2, 93);
-  ctx.fillStyle = '#f44'; ctx.font = 'bold 9px monospace';
-  ctx.fillText(Math.floor(p2.fuel) + '%', p2x + fuelW/2, 104);
+  drawBar(50, 95, barW, p1.fuel, MAX_FUEL, '#0ff', 'FUEL P1');
+  drawBar(50, 95 + barH + gap + 8, barW, p1.hp, p1.maxHp, p1.hp > 2 ? '#0f0' : '#f00', 'HP P1');
+
+  const p2x = W - 50 - barW;
+  drawBar(p2x, 95, barW, p2.fuel, MAX_FUEL, '#f44', 'FUEL P2');
+  drawBar(p2x, 95 + barH + gap + 8, barW, p2.hp, p2.maxHp, p2.hp > 2 ? '#0f0' : '#f00', 'HP P2');
+
+  // Legend längst ner
+  ctx.fillStyle = '#555'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('FUEL | HP | TORP TUBES', W/2, H - 40);
 
   // Coola formler — position och fysik
   const spd = Math.hypot(p1.vx, p1.vy);
