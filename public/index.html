@@ -13,14 +13,14 @@
   #menu {
     position:absolute; top:0; left:0; width:100%; height:100%;
     display:flex; flex-direction:column; justify-content:center; align-items:center;
-    background:rgba(0,0,0,0.85); z-index:10;
+    background:rgba(0,0,0,0.92); z-index:10;
   }
-  #menu h1 { color:#0ff; font-size:48px; margin-bottom:10px; text-shadow:0 0 20px #0ff; }
-  #menu h2 { color:#f44; font-size:16px; margin-bottom:40px; }
+  #menu h1 { color:#0ff; font-size:44px; margin-bottom:8px; text-shadow:0 0 20px #0ff; letter-spacing:4px; }
+  #menu h2 { color:#f44; font-size:14px; margin-bottom:28px; text-shadow:0 0 10px #f44; }
   #menu button {
     background:transparent; color:#fff; border:1px solid #555;
-    padding:12px 40px; margin:6px; font-size:18px; cursor:pointer;
-    font-family:'Courier New',monospace; width:280px;
+    padding:10px 30px; margin:5px; font-size:15px; cursor:pointer;
+    font-family:'Courier New',monospace; width:260px;
   }
   #menu button:hover { background:#222; border-color:#0ff; }
   #menu input {
@@ -46,7 +46,7 @@
 
 <!-- Menu -->
 <div id="menu">
-  <h1>⚔ SPACEWAR!</h1>
+  <h1>SPACEWAR!</h1>
   <h2>— orbital combat —</h2>
   <p style="color:#f44; font-size:12px; margin-top:-30px; margin-bottom:28px;">by Jim</p>
   <div id="menu-main">
@@ -197,7 +197,7 @@ function initAudio() {
 // ── Physics ──
 const G = 0.000009, RS = 28, RH = 28;  // krasch vid planetens yta
 const MAX_TORP = 3, MAX_FUEL = 100, THRUST = 55, ROT_SPEED = 3.0;
-const TORP_SPEED = 157, TORP_LIFE = 5.0, SHIP_R = 16;
+const TORP_SPEED = 220, TORP_LIFE = 5.0, SHIP_R = 16;
 const LASER_RANGE = 7 * SHIP_R, LASER_CD = 0.4, LASER_DUR = 0.08;
 
 function accel(x, y) {
@@ -217,7 +217,9 @@ function wrap(o) {
 function makeShip(x,y,angle,color,name) {
   return { x,y, vx:0, vy:0, angle, color, name, radius:SHIP_R,
     fuel:MAX_FUEL, torpedoes:MAX_TORP, hp:5, maxHp:5, alive:true, score:0,
-    fired:false, aiThrusting:false, laserCD:0, laserActive:false, laserTimer:0, trail:[] };
+    fired:false, aiThrusting:false, laserCD:0, laserActive:false, laserTimer:0, trail:[],
+    laserBuff: 0  // 0 = normal, >0 = grön laser x2 längd
+  };
 }
 
 const star = {x:W/2, y:H/2};
@@ -230,6 +232,12 @@ let starShake = 0;  // skakning på planeten
 let planetBoomTimer = 40;  // explosion på planeten var 40:e sek
 let gameTime = 0;  // speltid i sekunder
 let shadowAngle = -1;  // skugga på planeten (-1 = ingen skugga)
+let alien = null;  // alien-skepp
+let alienSpawnTimer = 10;  // första alien efter 10 sek
+let blinkTimer = 0;  // planet blinkar
+let wildFlash = 0;  // vild flash 6-7 gånger
+let roundCount = 0;  // räknare för var 6:e omgång
+let cheatSeq = [];  // 888-koden
 
 function resetGame() {
   gameOver = false; goTimer = 0; last = performance.now();  // sätt last till aktuell tid
@@ -262,6 +270,20 @@ document.addEventListener('keydown', e => {
   if (e.key===' '||e.key==='p') e.preventDefault();
   if (!onlineMode && ['j','l','i','k','u'].includes(e.key.toLowerCase())) p2Human = true;
   initAudio();
+  // 888 cheat sequence
+  if (e.key === '8') {
+    cheatSeq.push(8);
+    if (cheatSeq.length > 3) cheatSeq.shift();
+    if (cheatSeq.length === 3 && cheatSeq.every(k => k === 8)) {
+      starShake = 1;
+      for (let k=0;k<10;k++) explode(star.x, star.y, '#f80', 30);
+      explode(star.x, star.y, '#fff', 60);
+      planetBoomTimer = 999;
+      cheatSeq = [];
+    }
+  } else {
+    cheatSeq = [];
+  }
 });
 document.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
@@ -309,6 +331,14 @@ function explode(x,y,c,n=12) { for (let i=0; i<n; i++) { const a=Math.random()*6
 
 function endRound() {
   if (gameOver) return; gameOver = true; goTimer = 2.0;
+  roundCount++;
+  // Var 6:e omgång — planeten exploderar bort
+  if (roundCount % 6 === 0) {
+    starShake = 1;
+    for (let k=0; k<8; k++) explode(star.x, star.y, '#f80', 25);
+    explode(star.x, star.y, '#fff', 50);
+    setTimeout(() => { starShake = 0; }, 1000);
+  }
   const goMsg = document.getElementById('gameover-msg');
   const msg = (!p1.alive && !p2.alive) ? 'DRAW!'
             : !p1.alive ? (onlineMode ? 'YOU LOSE' : 'P2 WINS')
@@ -359,7 +389,11 @@ function tick(time) {
   // Send input in online mode
   if (onlineMode && ws && ws.readyState === WebSocket.OPEN) sendInput();
 
+  // Om menyn visas, hoppa över fysiken
+  const menuHidden = document.getElementById('menu').classList.contains('hidden');
+
   if (gameOver) { goTimer -= dt; if (goTimer<=0) resetRound(); else { render(false, false); requestAnimationFrame(tick); return; } }
+  if (!menuHidden) { render(false, false); requestAnimationFrame(tick); return; }
 
   const normAngle = (a) => ((a + Math.PI) % (2*Math.PI)) - Math.PI;
 
@@ -468,7 +502,11 @@ function tick(time) {
     t.vx += g.ax*dt; t.vy += g.ay*dt; t.x += t.vx*dt; t.y += t.vy*dt;
     t.life -= dt; wrap(t);
     let remove = false;
-    if (tooCloseToStar(t.x, t.y)) remove = true;
+    if (tooCloseToStar(t.x, t.y)) { 
+      remove = true;
+      explode(t.x, t.y, t.owner ? t.owner.color : '#ff0', 10);
+      explode(t.x, t.y, '#fff', 5);
+    }
     if (t.life > 0) {
       for (const ship of [p1, p2]) {
         if (!ship.alive || ship === t.owner || remove) continue;
@@ -491,20 +529,85 @@ function tick(time) {
   }
 
   // Regen
+  const effMaxTorp1 = Math.max(MAX_TORP, p1.laserBuff > 0 ? 6 : MAX_TORP);
+  const effMaxTorp2 = Math.max(MAX_TORP, p2.laserBuff > 0 ? 6 : MAX_TORP);
   if (p1.alive && p1.fuel < MAX_FUEL) p1.fuel += 2*dt;
   if (p2.alive && p2.fuel < MAX_FUEL) p2.fuel += 2*dt;
-  if (p1.alive && p1.torpedoes < MAX_TORP) p1.torpedoes += 0.2*dt;
-  if (p2.alive && p2.torpedoes < MAX_TORP) p2.torpedoes += 0.2*dt;
+  if (p1.alive && p1.torpedoes < effMaxTorp1) p1.torpedoes += (p1.laserBuff > 0 ? 0.4 : 0.2) * dt;
+  if (p2.alive && p2.torpedoes < effMaxTorp2) p2.torpedoes += (p2.laserBuff > 0 ? 0.4 : 0.2) * dt;
   starAngle += dt * 0.04;
   gameTime += dt;  // uppdatera speltid
 
-  // Comets & flashes
+  // Alien spawn — var 60:e sekund
+  alienSpawnTimer -= dt;
+  if (alienSpawnTimer <= 0 && !alien) {
+    alienSpawnTimer = 55 + Math.random() * 10;
+    const side = Math.floor(Math.random() * 4);
+    const spd = 15 + Math.random() * 25;
+    let x, y, vx, vy;
+    if (side === 0) { x = -30; y = Math.random() * H; vx = spd; vy = (Math.random()-0.5)*spd*0.3; }
+    else if (side === 1) { x = W+30; y = Math.random() * H; vx = -spd; vy = (Math.random()-0.5)*spd*0.3; }
+    else if (side === 2) { x = Math.random() * W; y = -30; vx = (Math.random()-0.5)*spd*0.3; vy = spd; }
+    else { x = Math.random() * W; y = H+30; vx = (Math.random()-0.5)*spd*0.3; vy = -spd; }
+    alien = { x, y, vx, vy, r: 12, alive: true, life: 15 + Math.random() * 10 };
+  }
+
+  // Alien physics + collision
+  if (alien && alien.alive) {
+    const g = accel(alien.x, alien.y);
+    // Svagare gravitation på alien, repelleras nära planeten
+    const sd = Math.hypot(alien.x - star.x, alien.y - star.y);
+    const gravMul = sd < 80 ? -0.5 : 0.15;  // repelleras om för nära
+    alien.vx += g.ax * dt * gravMul;
+    alien.vy += g.ay * dt * gravMul;
+    alien.x += alien.vx * dt;
+    alien.y += alien.vy * dt;
+    wrap(alien);
+    alien.life -= dt;
+
+    // När livstiden tar slut — flyg iväg
+    if (alien.life <= 0) {
+      const angle = Math.atan2(alien.y - star.y, alien.x - star.x);
+      alien.vx += Math.cos(angle) * 40 * dt;
+      alien.vy += Math.sin(angle) * 40 * dt;
+      if (Math.hypot(alien.x - star.x, alien.y - star.y) > 500) alien = null;
+    }
+
+    if (alien) {
+
+    // Kollision med skepp
+    for (const ship of [p1, p2]) {
+      if (!ship.alive) continue;
+      if (Math.hypot(alien.x - ship.x, alien.y - ship.y) < alien.r + ship.radius) {
+        ship.laserBuff = 20;
+        ship.torpedoes = Math.max(ship.torpedoes, 6);  // 6 torpeder direkt
+        explode(alien.x, alien.y, '#0f0', 20);
+        alien = null;
+        break;
+      }
+    }
+    }  // end if(alien)
+  }  // end if(alien && alien.alive)
+
+  // Laser buff timer
+  if (p1.laserBuff > 0) p1.laserBuff -= dt;
+  if (p2.laserBuff > 0) p2.laserBuff -= dt;
+
+  // Planet blinkar slumpvis
+  if (blinkTimer <= 0 && Math.random() < 0.0005) blinkTimer = 0.5 + Math.random() * 0.5;
+  if (blinkTimer > 0) blinkTimer -= dt;
+
+  // Vild flash 6-7 gånger
   flashTimer -= dt;
   if (flashTimer <= 0) { flashTimer = 0.5+Math.random()*3; const s = bgStars[Math.floor(Math.random()*bgStars.length)]; s.flashTimer = 0.1+Math.random()*0.2; s.flashColor = Math.random()>0.5?'#ff0':'#f44'; }
   
   // Random planet shake
   if (Math.random() < 0.001) starShake = 0.15 + Math.random() * 0.15;
   if (starShake > 0) starShake -= dt;
+
+  // Vild flash 6-7 gånger
+  if (wildFlash <= 0 && Math.random() < 0.0002) wildFlash = 6 + Math.floor(Math.random() * 2);
+  if (wildFlash > 0) wildFlash -= dt * 12;
   
   // Skugga på planeten — slumpvis
   if (shadowAngle < 0 && Math.random() < 0.0008) shadowAngle = Math.random() * Math.PI * 2;
@@ -549,11 +652,16 @@ function tick(time) {
   requestAnimationFrame(tick);
 }
 
-// ── Render (simplified) ──
+// ── Render ──
 function render(p1thrust = false, p2thrust = false) {
   ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
 
-  // Stars
+  // Om menyn visas, ingen bakgrundsrendering
+  if (document.getElementById('menu') && !document.getElementById('menu').classList.contains('hidden')) {
+    return;
+  }
+
+  // ── Background stars (långsam rotation + flash) ──
   for (const s of bgStars) {
     const x = star.x + s.dist * Math.cos(s.ang + starAngle), y = star.y + s.dist * Math.sin(s.ang + starAngle);
     if (x < -10 || x > W+10 || y < -10 || y > H+10) continue;
@@ -581,9 +689,15 @@ function render(p1thrust = false, p2thrust = false) {
   // Star
   const sx = starShake > 0 ? (Math.random()-0.5)*starShake*20 : 0;
   const sy = starShake > 0 ? (Math.random()-0.5)*starShake*20 : 0;
-  const g = ctx.createRadialGradient(star.x+sx, star.y+sy, 0, star.x+sx, star.y+sy, RS);
+  // Blink-effekt
+  const blink = blinkTimer > 0 && Math.floor(blinkTimer * 20) % 2 === 0;
+  const wild = wildFlash > 0 && Math.floor(wildFlash) % 2 === 0;
+  const starExploded = roundCount > 0 && roundCount % 6 === 0 && gameOver;
+  const starR = starExploded ? RS * 0.2 : (blink || wild ? RS * 1.5 : RS);
+  const starBright = wild ? '#fff' : (blink ? '#fff' : undefined);
+  const g = ctx.createRadialGradient(star.x+sx, star.y+sy, 0, star.x+sx, star.y+sy, starR);
   g.addColorStop(0,'#fff'); g.addColorStop(0.2,'#fea'); g.addColorStop(0.5,'#f60'); g.addColorStop(1,'#a00');
-  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(star.x+sx, star.y+sy, RS, 0, 6.283); ctx.fill();
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(star.x+sx, star.y+sy, starR, 0, 6.283); ctx.fill();
 
   // Skugga som glider över planeten
   if (shadowAngle >= 0) {
@@ -624,10 +738,12 @@ function render(p1thrust = false, p2thrust = false) {
   // Laser beams
   for (const ship of [p1, p2]) {
     if (!ship.alive || !ship.laserActive) continue;
-    const col = ship.color;
+    const buffed = ship.laserBuff > 0;
+    const col = buffed ? '#0f0' : ship.color;
+    const range = buffed ? LASER_RANGE * 2 : LASER_RANGE;
     const ca = Math.cos(ship.angle), sa = Math.sin(ship.angle);
     const sx = ship.x + ca * SHIP_R, sy = ship.y + sa * SHIP_R;
-    const ex = sx + ca * LASER_RANGE, ey = sy + sa * LASER_RANGE;
+    const ex = sx + ca * range, ey = sy + sa * range;
     ctx.shadowColor = col; ctx.shadowBlur = 12;
     ctx.strokeStyle = col + '99'; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
@@ -635,6 +751,20 @@ function render(p1thrust = false, p2thrust = false) {
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
     ctx.shadowBlur = 0;
+  }
+
+  // Alien-skepp
+  if (alien && alien.alive) {
+    ctx.save();
+    ctx.translate(alien.x, alien.y);
+    ctx.strokeStyle = '#0f0'; ctx.lineWidth = 2; ctx.shadowColor = '#0f0'; ctx.shadowBlur = 8;
+    // UFO-form
+    ctx.beginPath(); ctx.arc(0, 0, alien.r, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, -3, alien.r * 0.5, Math.PI, 0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-alien.r, 0); ctx.lineTo(alien.r, 0); ctx.stroke();
+    ctx.fillStyle = '#0f0'; ctx.beginPath(); ctx.arc(0, 2, 2, 0, Math.PI*2); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.restore();
   }
 
   // Ships
@@ -681,10 +811,12 @@ function render(p1thrust = false, p2thrust = false) {
 
   // Torped charge indicator
   function drawCharge(x, y, ship) {
-    const segs = MAX_TORP, segW = 20, segH = 10, gap = 3;
+    const buffed = ship.laserBuff > 0;
+    const segs = buffed ? 6 : MAX_TORP;
+    const segW = buffed ? 12 : 20, segH = 10, gap = 2;
     const tw = segs * segW + (segs-1) * gap;
     ctx.fillStyle = '#222'; ctx.font = '8px monospace'; ctx.textAlign = 'center';
-    ctx.fillText(ship.name, x + tw/2, y - 2);
+    ctx.fillText(ship.name + (buffed ? ' ⚡' : ''), x + tw/2, y - 2);
     for (let i=0; i<segs; i++) {
       const sx = x + i*(segW+gap);
       const fill = Math.max(0, Math.min(1, ship.torpedoes - i));
@@ -704,11 +836,48 @@ function render(p1thrust = false, p2thrust = false) {
     }
   }
   drawCharge(50, 80, p1);
-  const tw = MAX_TORP * 20 + (MAX_TORP-1) * 3;
+  const tw = (p1.laserBuff > 0 ? 6 : MAX_TORP) * 12 + ((p1.laserBuff>0?6:MAX_TORP)-1) * 2;
   drawCharge(W - 50 - tw, 80, p2);
 
   ctx.fillStyle = '#444'; ctx.font = '10px monospace'; ctx.textAlign = 'left';
   ctx.fillText('by Jim', 10, H - 10);
+
+  // Bränsleindikatorer — stor och tydlig för båda skeppen
+  ctx.font = '8px monospace'; ctx.textAlign = 'center';
+  const fuelW = 80, fuelH = 10;
+  // P1
+  ctx.fillStyle = '#111'; ctx.fillRect(50, 95, fuelW, fuelH);
+  ctx.strokeStyle = '#0ff'; ctx.lineWidth = 1; ctx.strokeRect(50, 95, fuelW, fuelH);
+  ctx.fillStyle = p1.fuel > 30 ? '#0ff' : '#f00';
+  ctx.fillRect(51, 96, (fuelW-2) * Math.max(0, p1.fuel / MAX_FUEL), fuelH-2);
+  ctx.fillStyle = '#0ff'; ctx.fillText('FUEL', 50 + fuelW/2, 93);
+  ctx.fillStyle = '#0ff'; ctx.font = 'bold 9px monospace';
+  ctx.fillText(Math.floor(p1.fuel) + '%', 50 + fuelW/2, 104);
+
+  // P2
+  const p2x = W - 50 - fuelW;
+  ctx.fillStyle = '#111'; ctx.fillRect(p2x, 95, fuelW, fuelH);
+  ctx.strokeStyle = '#f44'; ctx.lineWidth = 1; ctx.strokeRect(p2x, 95, fuelW, fuelH);
+  ctx.fillStyle = p2.fuel > 30 ? '#f44' : '#f00';
+  ctx.fillRect(p2x+1, 96, (fuelW-2) * Math.max(0, p2.fuel / MAX_FUEL), fuelH-2);
+  ctx.fillStyle = '#f44'; ctx.font = '8px monospace';
+  ctx.fillText('FUEL', p2x + fuelW/2, 93);
+  ctx.fillStyle = '#f44'; ctx.font = 'bold 9px monospace';
+  ctx.fillText(Math.floor(p2.fuel) + '%', p2x + fuelW/2, 104);
+
+  // Coola formler — position och fysik
+  const spd = Math.hypot(p1.vx, p1.vy);
+  const sd = Math.hypot(p1.x - star.x, p1.y - star.y);
+  const grav = G * sd * sd * sd;
+  const vCirc = Math.sqrt(G) * sd * sd;
+  ctx.fillStyle = '#0a0'; ctx.font = '11px monospace'; ctx.textAlign = 'left';
+  const lines = [
+    'x=' + p1.x.toFixed(1) + '  y=' + p1.y.toFixed(1),
+    'v=' + spd.toFixed(1) + '  v_orb=' + vCirc.toFixed(1) + ' px/s',
+    'a_g=' + grav.toFixed(1) + ' px/s²  r=' + sd.toFixed(1) + ' px',
+    'HP=' + p1.hp + '/' + p1.maxHp + '  TORP=' + Math.floor(p1.torpedoes)
+  ];
+  lines.forEach((l, i) => ctx.fillText(l, 10, 130 + i * 14));
 
   // Timer i högra hörnet längst ner
   const mins = Math.floor(gameTime / 60);
