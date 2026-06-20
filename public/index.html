@@ -92,7 +92,6 @@ resize(); addEventListener('resize', resize);
 // ── WebSocket ──
 let ws = null;
 let onlineMode = false;
-let opponentKeys = {};
 let pendingLaserHit = 0;  // räknare för laser-träffar i online
 // Deterministisk slump för online-läge
 let rngState = 0;
@@ -220,10 +219,6 @@ function backToMenu() {
   onlineMode = false;
 }
 
-// ═══════════════════════════════════════════════
-//  GAME CODE (abridged — full physics & render)
-// ═══════════════════════════════════════════════
-
 // ── Audio ──
 let audioCtx = null;
 function initAudio() {
@@ -261,7 +256,7 @@ function makeShip(x,y,angle,color,name) {
 }
 
 const star = {x:W/2, y:H/2};
-const ORBIT_R = 180;
+const ORBIT_R = 120;
 function orbitVel(r) { return Math.sqrt(G) * r * r; }  // kubisk: v = √G · r²
 
 let p1, p2, torps, debris, bgStars, starAngle, comets, flashTimer;
@@ -284,8 +279,8 @@ function resetGame() {
   p1 = makeShip(450 + ORBIT_R, 350, -Math.PI/2, '#0ff', 'P1');
   p1.vx = 0; p1.vy = -orbitVel(ORBIT_R); p1.score = s1;
   p1.hp = 5;
-  p2 = makeShip(450 - ORBIT_R, 350, Math.PI/2, '#f44', 'P2');
-  p2.vx = 0; p2.vy = orbitVel(ORBIT_R); p2.score = s2;
+  p2 = makeShip(450, 350 - ORBIT_R, Math.PI, '#f44', 'P2');
+  p2.vx = orbitVel(ORBIT_R); p2.vy = 0; p2.score = s2;
   torps = []; debris = []; comets = []; flashTimer = 0; starAngle = 0;
 
   if (!bgStars) {
@@ -396,11 +391,11 @@ function endRound() {
 
 function resetRound() {
   const s1 = p1.score, s2 = p2.score;
-  p1 = makeShip(450+ORBIT_R, 350, -Math.PI/2, '#0ff', 'P1');
+  p1 = makeShip(450 + ORBIT_R, 350, -Math.PI/2, '#0ff', 'P1');
   p1.vx = 0; p1.vy = -orbitVel(ORBIT_R); p1.score = s1; p1.hp = 5;
-  p2 = makeShip(450-ORBIT_R, 350, Math.PI/2, '#f44', 'P2');
-  p2.vx = 0; p2.vy = orbitVel(ORBIT_R); p2.score = s2; p2.hp = 5;
-  torps = []; debris = []; p2Human = false; gameOver = false;
+  p2 = makeShip(450, 350 - ORBIT_R, Math.PI, '#f44', 'P2');
+  p2.vx = orbitVel(ORBIT_R); p2.vy = 0; p2.score = s2; p2.hp = 5;
+  torps = []; debris = []; p2Human = false; gameOver = false; accumulator = 0; last = performance.now();
 }
 
 // ── AI ──
@@ -464,6 +459,8 @@ function step(dt) {
   // I online-läge, använd seedad slump så båda klienterna får samma värden
   const origRandom = Math.random;
   if (onlineMode) Math.random = seededRandom;
+
+  try {
 
   // P1 input (always local)
   if (p1.alive) {
@@ -713,8 +710,9 @@ function step(dt) {
     else { x=Math.random()*W; y=H+20; vx=(Math.random()-0.5)*spd*0.5; vy=-spd; }
     comets.push({x,y,vx,vy, r:1.5+Math.random()*2, life:1.5+Math.random()*2, color:['#ff8','#f80','#8ff','#f88'][Math.floor(Math.random()*4)]});
   }
-  // Återställ Math.random
-  if (onlineMode) Math.random = origRandom;
+  } finally {
+    if (onlineMode) Math.random = origRandom;
+  }
 }
 
 // ── Render ──
@@ -765,7 +763,6 @@ function render() {
   const wild = wildFlash > 0 && Math.floor(wildFlash) % 2 === 0;
   const starExploded = roundCount > 0 && roundCount % 6 === 0 && gameOver;
   const starR = starExploded ? RS * 0.2 : (blink || wild ? RS * 1.5 : RS);
-  const starBright = wild ? '#fff' : (blink ? '#fff' : undefined);
   const g = ctx.createRadialGradient(star.x+sx, star.y+sy, 0, star.x+sx, star.y+sy, starR);
   g.addColorStop(0,'#fff'); g.addColorStop(0.2,'#fea'); g.addColorStop(0.5,'#f60'); g.addColorStop(1,'#a00');
   ctx.fillStyle = g; ctx.beginPath(); ctx.arc(star.x+sx, star.y+sy, starR, 0, 6.283); ctx.fill();
@@ -873,7 +870,7 @@ function render() {
   }
 
   // HUD
-  const lbl = onlineMode ? (opponentKeys ? 'OPPONENT' : 'AI') : 'P2';
+  const lbl = onlineMode ? 'OPPONENT' : 'P2';
   ctx.font = 'bold 16px monospace';
   ctx.textAlign = 'left'; ctx.fillStyle = '#0ff';
   ctx.fillText(onlineMode ? 'YOU' : 'P1', 20, 24);

@@ -4,10 +4,27 @@ const fs = require('fs');
 const path = require('path');
 
 const PORT = process.env.PORT || 3000;
+const PUBLIC_DIR = path.join(__dirname, 'public');
 
 // Serve static files
 const server = http.createServer((req, res) => {
-  let filePath = path.join(__dirname, 'public', req.url === '/' ? 'index.html' : req.url);
+  let requestPath;
+  try {
+    requestPath = decodeURIComponent((req.url || '/').split('?')[0]);
+  } catch {
+    res.writeHead(400);
+    res.end('Bad request');
+    return;
+  }
+
+  const fileName = requestPath === '/' ? 'index.html' : requestPath.replace(/^\/+/, '');
+  const filePath = path.normalize(path.join(PUBLIC_DIR, fileName));
+  if (!filePath.startsWith(PUBLIC_DIR + path.sep)) {
+    res.writeHead(403);
+    res.end('Forbidden');
+    return;
+  }
+
   const ext = path.extname(filePath);
   const mime = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css' };
 
@@ -64,7 +81,11 @@ wss.on('connection', (ws) => {
       }
 
       case 'join': {
-        const code = msg.code.toUpperCase();
+        const code = String(msg.code || '').trim().toUpperCase();
+        if (!/^[A-Z2-9]{4}$/.test(code)) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid room code' }));
+          return;
+        }
         const room = rooms[code];
         if (!room) {
           ws.send(JSON.stringify({ type: 'error', message: 'Room not found' }));
@@ -88,6 +109,7 @@ wss.on('connection', (ws) => {
 
       case 'input': {
         // Forward game state to the opponent
+        if (!msg.state || typeof msg.state !== 'object') return;
         const room = rooms[playerRoom];
         if (!room) return;
         const target = playerRole === 'host' ? room.guest : room.host;
