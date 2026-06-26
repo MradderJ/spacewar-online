@@ -268,14 +268,17 @@ function accel(x, y) {
   const dx = W/2 - x, dy = H/2 - y;
   const r = Math.hypot(dx, dy);
   if (r < 1 || !isFinite(r)) return {ax:0, ay:0};
-  // Kubisk: a = G * r³ — svag nära, stark vid kanterna
+  // Kubisk gravitation: a = G·r³, mot centrum
   const a = G * r * r * r;
   return {ax: dx/r * a, ay: dy/r * a};
 }
-function wrap(o) {
-  const m = 50;
-  if (o.x < -m) o.x = W+m; if (o.x > W+m) o.x = -m;
-  if (o.y < -m) o.y = H+m; if (o.y > H+m) o.y = -m;
+function wrap(obj) {
+  const m = 80;
+  // Mjuk övergång — tryck tillbaka mot kanten istället för hård teleport
+  if (obj.x < -m) { obj.x = W + m; }
+  if (obj.x > W + m) { obj.x = -m; }
+  if (obj.y < -m) { obj.y = H + m; }
+  if (obj.y > H + m) { obj.y = -m; }
 }
 
 function makeShip(x,y,angle,color,name) {
