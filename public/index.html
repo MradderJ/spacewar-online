@@ -144,7 +144,7 @@ function connectWs(onOpen) {
           // Ta emot laser-träff(ar) — applicera skada på vår P1
           if (s.laserHit && p1.alive) {
             for (let i=0; i<Math.min(s.laserHit, 10); i++) {
-              p1.hp--;
+              p1.hp -= 2;
               explode(p1.x, p1.y, p2.color, 6);
               if (p1.hp <= 0) { p1.alive = false; explode(p1.x,p1.y,p1.color,25); p2.score++; if(!gameOver)endRound(); break; }
             }
@@ -280,7 +280,7 @@ function wrap(o) {
 
 function makeShip(x,y,angle,color,name) {
   return { x,y, vx:0, vy:0, angle, color, name, radius:SHIP_R,
-    fuel:MAX_FUEL, torpedoes:MAX_TORP, hp:5, maxHp:5, alive:true, score:0,
+    fuel:MAX_FUEL, torpedoes:MAX_TORP, hp:10, maxHp:10, alive:true, score:0,
     fired:false, aiThrusting:false, laserCD:0, laserActive:false, laserTimer:0, trail:[],
     laserBuff: 0,  // 0 = normal, >0 = grön laser x2 längd
     invuln: 1.0  // osårbar första sekunden
@@ -309,9 +309,9 @@ function resetGame() {
   p2Human = false;
   const s1 = p1 ? p1.score : 0, s2 = p2 ? p2.score : 0;
   p1 = makeShip(450 + ORBIT_R, 350, -Math.PI/2, '#0ff', 'P1');
-  p1.vx = 0; p1.vy = -orbitVel(ORBIT_R); p1.score = s1; p1.hp = 5;
+  p1.vx = 0; p1.vy = -orbitVel(ORBIT_R); p1.score = s1;
   p2 = makeShip(450 - ORBIT_R, 350, Math.PI/2, '#f44', 'P2');
-  p2.vx = 0; p2.vy = orbitVel(ORBIT_R); p2.score = s2; p2.hp = 5;
+  p2.vx = 0; p2.vy = orbitVel(ORBIT_R); p2.score = s2;
   torps = []; debris = []; comets = []; flashTimer = 0; starAngle = 0;
 
   if (!bgStars) {
@@ -382,7 +382,7 @@ function fireLaser(ship) {
     if (onlineMode) {
       if (enemy.invuln <= 0) pendingLaserHit++;
     } else {
-      if (enemy.invuln <= 0) enemy.hp -= 1;
+      if (enemy.invuln <= 0) enemy.hp -= 2;
     }
     explode(enemy.x, enemy.y, ship.color, 6);
     if (!onlineMode && enemy.hp <= 0) { enemy.alive = false; ship.score++; endRound(); }
@@ -429,9 +429,9 @@ function endRound() {
 function resetRound() {
   const s1 = p1.score, s2 = p2.score;
   p1 = makeShip(450+ORBIT_R, 350, -Math.PI/2, '#0ff', 'P1');
-  p1.vx = 0; p1.vy = -orbitVel(ORBIT_R); p1.score = s1; p1.hp = 5;
+  p1.vx = 0; p1.vy = -orbitVel(ORBIT_R); p1.score = s1;
   p2 = makeShip(450-ORBIT_R, 350, Math.PI/2, '#f44', 'P2');
-  p2.vx = 0; p2.vy = orbitVel(ORBIT_R); p2.score = s2; p2.hp = 5;
+  p2.vx = 0; p2.vy = orbitVel(ORBIT_R); p2.score = s2;
   torps = []; debris = []; p2Human = false; gameOver = false; accumulator = 0; last = performance.now();
 }
 
@@ -614,7 +614,7 @@ function step(dt) {
       for (const ship of [p1, p2]) {
         if (!ship.alive || ship === t.owner || remove || ship.invuln > 0) continue;
         if (Math.hypot(t.x-ship.x, t.y-ship.y) < ship.radius+3) {
-          ship.hp -= 3; explode(t.x,t.y, t.owner?t.owner.color:'#ff0',8);
+          ship.hp -= 6; explode(t.x,t.y, t.owner?t.owner.color:'#ff0',8);
           if (ship.hp <= 0) { ship.alive = false; explode(ship.x,ship.y,ship.color,25); const e=ship===p1?p2:p1; if(e.alive)e.score++; if(!gameOver)endRound(); }
           remove = true; break;
         }
