@@ -133,6 +133,14 @@ function connectWs(onOpen) {
           const s = msg.state;
           p2.x = s.x; p2.y = s.y; p2.vx = s.vx; p2.vy = s.vy; p2.angle = s.angle;
           p2.alive = s.alive;
+          if (typeof s.hp === 'number') p2.hp = s.hp;
+          if (typeof s.score === 'number') p2.score = s.score;
+          if (typeof s.fuel === 'number') p2.fuel = s.fuel;
+          p2.thrusting = s.thrusting || false;
+          // P2 trail i online
+          p2.trail = p2.trail || [];
+          p2.trail.push({x: p2.x, y: p2.y});
+          if (p2.trail.length > 40) p2.trail.shift();
           // Ta emot laser-träff(ar) — applicera skada på vår P1
           if (s.laserHit && p1.alive) {
             for (let i=0; i<Math.min(s.laserHit, 10); i++) {
@@ -175,7 +183,8 @@ function sendInput() {
   }));
   const state = {
     x: p1.x, y: p1.y, vx: p1.vx, vy: p1.vy, angle: p1.angle,
-    alive: p1.alive,
+    alive: p1.alive, hp: p1.hp, score: p1.score, fuel: p1.fuel,
+    thrusting: (keys['w']||keys['arrowup']) && p1.fuel > 0,
     laserHit: pendingLaserHit,
     torps: p1torps
   };
@@ -225,6 +234,29 @@ function initAudio() {
   if (audioCtx) return;
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 }
+function beep(freq, dur, vol=0.1, type='square') {
+  if (!audioCtx) return;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type; o.frequency.value = freq;
+  g.gain.setValueAtTime(vol, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + dur);
+}
+function noise(dur, vol=0.08) {
+  if (!audioCtx) return;
+  const sr = audioCtx.sampleRate;
+  const buf = audioCtx.createBuffer(1, sr*dur, sr);
+  const d = buf.getChannelData(0);
+  for (let i=0; i<d.length; i++) d[i] = Math.random()*2-1;
+  const s = audioCtx.createBufferSource(); s.buffer = buf;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(vol, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime+dur);
+  s.connect(g).connect(audioCtx.destination);
+  s.start();
+}
 
 // ── Physics ──
 const G = 0.000009, RS = 28, RH = 28;  // krasch vid planetens yta
@@ -256,7 +288,7 @@ function makeShip(x,y,angle,color,name) {
 }
 
 const star = {x:W/2, y:H/2};
-const ORBIT_R = 120;
+const ORBIT_R = 170;
 function orbitVel(r) { return Math.sqrt(G) * r * r; }  // kubisk: v = √G · r²
 
 let p1, p2, torps, debris, bgStars, starAngle, comets, flashTimer;
@@ -277,10 +309,9 @@ function resetGame() {
   p2Human = false;
   const s1 = p1 ? p1.score : 0, s2 = p2 ? p2.score : 0;
   p1 = makeShip(450 + ORBIT_R, 350, -Math.PI/2, '#0ff', 'P1');
-  p1.vx = 0; p1.vy = -orbitVel(ORBIT_R); p1.score = s1;
-  p1.hp = 5;
-  p2 = makeShip(450, 350 - ORBIT_R, Math.PI, '#f44', 'P2');
-  p2.vx = orbitVel(ORBIT_R); p2.vy = 0; p2.score = s2;
+  p1.vx = 0; p1.vy = -orbitVel(ORBIT_R); p1.score = s1; p1.hp = 5;
+  p2 = makeShip(450 - ORBIT_R, 350, Math.PI/2, '#f44', 'P2');
+  p2.vx = 0; p2.vy = orbitVel(ORBIT_R); p2.score = s2; p2.hp = 5;
   torps = []; debris = []; comets = []; flashTimer = 0; starAngle = 0;
 
   if (!bgStars) {
@@ -327,6 +358,7 @@ addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 function fire(ship) {
   if (!ship.alive || ship.torpedoes < 1) return;
   ship.torpedoes--; if (ship.torpedoes < 0) ship.torpedoes = 0;
+  beep(120, 0.08, 0.06, 'sawtooth');
   const a = ship.angle;
   torps.push({ x: ship.x+Math.cos(a)*(SHIP_R+4), y: ship.y+Math.sin(a)*(SHIP_R+4),
     vx: ship.vx+Math.cos(a)*TORP_SPEED, vy: ship.vy+Math.sin(a)*TORP_SPEED, life: TORP_LIFE, owner: ship });
@@ -334,6 +366,7 @@ function fire(ship) {
 
 function fireLaser(ship) {
   if (!ship.alive || ship.laserCD > 0) return;
+  beep(1800, 0.06, 0.07, 'square');
   ship.laserCD = LASER_CD; ship.laserActive = true; ship.laserTimer = LASER_DUR;
   const ca = Math.cos(ship.angle), sa = Math.sin(ship.angle);
   const sx = ship.x + ca * SHIP_R, sy = ship.y + sa * SHIP_R;
@@ -347,9 +380,9 @@ function fireLaser(ship) {
   if (dist < enemy.radius + 3) {
     // I online-läge: flagga för nätverkssynk istället för lokal hp-ändring
     if (onlineMode) {
-      pendingLaserHit++;
+      if (enemy.invuln <= 0) pendingLaserHit++;
     } else {
-      enemy.hp -= 1;
+      if (enemy.invuln <= 0) enemy.hp -= 1;
     }
     explode(enemy.x, enemy.y, ship.color, 6);
     if (!onlineMode && enemy.hp <= 0) { enemy.alive = false; ship.score++; endRound(); }
@@ -367,7 +400,11 @@ function fireLaser(ship) {
 }
 
 function tooCloseToStar(x,y) { const d = x-star.x, e = y-star.y; return d*d + e*e < RH*RH; }
-function explode(x,y,c,n=12) { for (let i=0; i<n; i++) { const a=Math.random()*6.283, s=30+Math.random()*120; debris.push({x,y, vx:Math.cos(a)*s, vy:Math.sin(a)*s, life:0.4+Math.random()*0.8, color:c, r:1+Math.random()*3}); } }
+function explode(x,y,c,n=12) {
+  noise(0.05 + n*0.005, 0.05);
+  beep(60, 0.1 + n*0.005, 0.03, 'sawtooth');
+  for (let i=0; i<n; i++) { const a=Math.random()*6.283, s=30+Math.random()*120; debris.push({x,y, vx:Math.cos(a)*s, vy:Math.sin(a)*s, life:0.4+Math.random()*0.8, color:c, r:1+Math.random()*3}); }
+}
 
 function endRound() {
   if (gameOver) return; gameOver = true; goTimer = 2.0;
@@ -391,10 +428,10 @@ function endRound() {
 
 function resetRound() {
   const s1 = p1.score, s2 = p2.score;
-  p1 = makeShip(450 + ORBIT_R, 350, -Math.PI/2, '#0ff', 'P1');
+  p1 = makeShip(450+ORBIT_R, 350, -Math.PI/2, '#0ff', 'P1');
   p1.vx = 0; p1.vy = -orbitVel(ORBIT_R); p1.score = s1; p1.hp = 5;
-  p2 = makeShip(450, 350 - ORBIT_R, Math.PI, '#f44', 'P2');
-  p2.vx = orbitVel(ORBIT_R); p2.vy = 0; p2.score = s2; p2.hp = 5;
+  p2 = makeShip(450-ORBIT_R, 350, Math.PI/2, '#f44', 'P2');
+  p2.vx = 0; p2.vy = orbitVel(ORBIT_R); p2.score = s2; p2.hp = 5;
   torps = []; debris = []; p2Human = false; gameOver = false; accumulator = 0; last = performance.now();
 }
 
@@ -493,8 +530,8 @@ function step(dt) {
   // Physics
   const p1thrust = p1.alive && (keys['w']||keys['arrowup']) && p1.fuel>0;
   const p2thrust = p2.alive && (
-    !onlineMode ? (p2Human ? keys['i'] : p2.aiThrusting)
-    : false
+    onlineMode ? (p2.thrusting || false)
+    : (p2Human ? keys['i'] : p2.aiThrusting)
   ) && p2.fuel>0;
 
   for (const ship of [p1, p2]) {
@@ -553,8 +590,11 @@ function step(dt) {
           p2.vx += relV * nx; p2.vy += relV * ny;
         }
         for (let k=0; k<3; k++) explode((p1.x+p2.x)/2, (p1.y+p2.y)/2, '#ff0', 10);
-        if (p1.hp <= 0) { p1.alive = false; explode(p1.x,p1.y,p1.color,25); p2.score++; endRound(); }
-        if (p2.hp <= 0) { p2.alive = false; explode(p2.x,p2.y,p2.color,25); p1.score++; endRound(); }
+        // Defer endRound så båda dödsfallen hanteras
+        const p1dead = p1.hp <= 0, p2dead = p2.hp <= 0;
+        if (p1dead) { p1.alive = false; explode(p1.x,p1.y,p1.color,25); p2.score++; }
+        if (p2dead) { p2.alive = false; explode(p2.x,p2.y,p2.color,25); p1.score++; }
+        if ((p1dead || p2dead) && !gameOver) endRound();
       }
     }
   }
@@ -572,7 +612,7 @@ function step(dt) {
     }
     if (t.life > 0) {
       for (const ship of [p1, p2]) {
-        if (!ship.alive || ship === t.owner || remove) continue;
+        if (!ship.alive || ship === t.owner || remove || ship.invuln > 0) continue;
         if (Math.hypot(t.x-ship.x, t.y-ship.y) < ship.radius+3) {
           ship.hp -= 3; explode(t.x,t.y, t.owner?t.owner.color:'#ff0',8);
           if (ship.hp <= 0) { ship.alive = false; explode(ship.x,ship.y,ship.color,25); const e=ship===p1?p2:p1; if(e.alive)e.score++; if(!gameOver)endRound(); }
@@ -598,6 +638,9 @@ function step(dt) {
   if (p2.alive && p2.fuel < MAX_FUEL) p2.fuel += 2*dt;
   if (p1.alive && p1.torpedoes < effMaxTorp1) p1.torpedoes += (p1.laserBuff > 0 ? 0.4 : 0.2) * dt;
   if (p2.alive && p2.torpedoes < effMaxTorp2) p2.torpedoes += (p2.laserBuff > 0 ? 0.4 : 0.2) * dt;
+  // Långsam HP-regen
+  if (p1.alive && p1.hp < p1.maxHp) p1.hp += 0.15 * dt;
+  if (p2.alive && p2.hp < p2.maxHp) p2.hp += 0.15 * dt;
   starAngle += dt * 0.04;
   gameTime += dt;  // uppdatera speltid
 
@@ -726,8 +769,8 @@ function render() {
 
   const p1thrust = p1.alive && (keys['w']||keys['arrowup']) && p1.fuel>0;
   const p2thrust = p2.alive && (
-    !onlineMode ? (p2Human ? keys['i'] : p2.aiThrusting)
-    : false
+    onlineMode ? (p2.thrusting || false)
+    : (p2Human ? keys['i'] : p2.aiThrusting)
   ) && p2.fuel>0;
 
   // ── Background stars (långsam rotation + flash) ──
@@ -786,8 +829,10 @@ function render() {
   for (const ship of [p1, p2]) {
     if (!ship.alive) continue;
     for (let i=1; i<ship.trail.length; i++) {
-      const a = (i/ship.trail.length)*0.25;
-      ctx.strokeStyle = ship.color + Math.floor(a*255).toString(16).padStart(2,'0');
+      const alpha = (i/ship.trail.length) * 0.25;
+      const hexCol = parseInt(ship.color.slice(1), 16);
+      const r = (hexCol >> 16) & 0xff, g = (hexCol >> 8) & 0xff, b = hexCol & 0xff;
+      ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
       ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(ship.trail[i-1].x,ship.trail[i-1].y); ctx.lineTo(ship.trail[i].x,ship.trail[i].y); ctx.stroke();
     }
   }
@@ -813,7 +858,9 @@ function render() {
     const sx = ship.x + ca * SHIP_R, sy = ship.y + sa * SHIP_R;
     const ex = sx + ca * range, ey = sy + sa * range;
     ctx.shadowColor = col; ctx.shadowBlur = 12;
-    ctx.strokeStyle = col + '99'; ctx.lineWidth = 3;
+    const hexCol = parseInt(col.slice(1), 16);
+    const r = (hexCol >> 16) & 0xff, g = (hexCol >> 8) & 0xff, b = hexCol & 0xff;
+    ctx.strokeStyle = `rgba(${r},${g},${b},0.6)`; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
     ctx.shadowColor = '#fff'; ctx.shadowBlur = 6;
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
@@ -906,10 +953,10 @@ function render() {
     }
   }
   drawCharge(50, 80, p1);
-  const tw = (p1.laserBuff > 0 ? 6 : MAX_TORP) * 12 + ((p1.laserBuff>0?6:MAX_TORP)-1) * 2;
-  drawCharge(W - 50 - tw, 80, p2);
+  const tw2 = (p2.laserBuff > 0 ? 6 : MAX_TORP) * 12 + ((p2.laserBuff>0?6:MAX_TORP)-1) * 2;
+  drawCharge(W - 50 - tw2, 80, p2);
 
-  ctx.fillStyle = '#444'; ctx.font = '10px monospace'; ctx.textAlign = 'left';
+  ctx.fillStyle = '#888'; ctx.font = '10px monospace'; ctx.textAlign = 'left';
   ctx.fillText('by Jim', 10, H - 10);
 
   // Bränsle- och HP-indikatorer

@@ -4,6 +4,10 @@ const fs = require('fs');
 const path = require('path');
 
 const PORT = process.env.PORT || 3000;
+
+function safeSend(ws, data) {
+  try { if (ws && ws.readyState === WebSocket.OPEN) ws.send(data); } catch {}
+}
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 // Serve static files
@@ -75,7 +79,7 @@ wss.on('connection', (ws) => {
         rooms[code] = { host: ws, guest: null, code };
         playerRoom = code;
         playerRole = 'host';
-        ws.send(JSON.stringify({ type: 'room_created', code }));
+        safeSend(ws, JSON.stringify({ type: 'room_created', code }));
         console.log(`Room ${code} created`);
         break;
       }
@@ -88,11 +92,11 @@ wss.on('connection', (ws) => {
         }
         const room = rooms[code];
         if (!room) {
-          ws.send(JSON.stringify({ type: 'error', message: 'Room not found' }));
+          safeSend(ws, JSON.stringify({ type: 'error', message: 'Room not found' }));
           return;
         }
         if (room.guest) {
-          ws.send(JSON.stringify({ type: 'error', message: 'Room is full' }));
+          safeSend(ws, JSON.stringify({ type: 'error', message: 'Room is full' }));
           return;
         }
         room.guest = ws;
@@ -101,8 +105,8 @@ wss.on('connection', (ws) => {
         // Generera gemensamt frö för deterministisk slump
         const seed = Math.floor(Math.random() * 2147483647);
         // Notify both players
-        room.host.send(JSON.stringify({ type: 'matched', role: 'host', seed }));
-        ws.send(JSON.stringify({ type: 'matched', role: 'guest', seed }));
+        safeSend(room.host, JSON.stringify({ type: 'matched', role: 'host', seed }));
+        safeSend(ws, JSON.stringify({ type: 'matched', role: 'guest', seed }));
         console.log(`Player joined room ${code}`);
         break;
       }
@@ -114,13 +118,13 @@ wss.on('connection', (ws) => {
         if (!room) return;
         const target = playerRole === 'host' ? room.guest : room.host;
         if (target && target.readyState === WebSocket.OPEN) {
-          target.send(JSON.stringify({ type: 'opponent_input', state: msg.state }));
+          safeSend(target, JSON.stringify({ type: 'opponent_input', state: msg.state }));
         }
         break;
       }
 
       case 'ping': {
-        ws.send(JSON.stringify({ type: 'pong' }));
+        safeSend(ws, JSON.stringify({ type: 'pong' }));
         break;
       }
     }
@@ -131,7 +135,7 @@ wss.on('connection', (ws) => {
       const room = rooms[playerRoom];
       const other = playerRole === 'host' ? room.guest : room.host;
       if (other && other.readyState === WebSocket.OPEN) {
-        other.send(JSON.stringify({ type: 'opponent_disconnected' }));
+        safeSend(other, JSON.stringify({ type: 'opponent_disconnected' }));
       }
       delete rooms[playerRoom];
       console.log(`Room ${playerRoom} closed`);
