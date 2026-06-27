@@ -92,8 +92,8 @@ resize(); addEventListener('resize', resize);
 // ── WebSocket ──
 let ws = null;
 let onlineMode = false;
+let isHost = false;  // true om vi är host i online-läge
 let pendingLaserHit = 0;  // räknare för laser-träffar i online
-// Deterministisk slump för online-läge
 let rngState = 0;
 function seededRandom() {
   rngState = (rngState * 1664525 + 1013904223) & 0x7fffffff;
@@ -108,42 +108,59 @@ function getWsUrl() {
 
 function connectWs(onOpen) {
   const url = getWsUrl();
-  ws = new WebSocket(url);
-  ws.onopen = onOpen;
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
+  if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
+  const socket = new WebSocket(url);
+  ws = socket;
+  socket.onopen = () => {
+    if (ws === socket) onOpen();
+  };
+  socket.onmessage = (e) => {
+    if (ws !== socket) return;
+    let msg;
+    try {
+      msg = JSON.parse(e.data);
+    } catch {
+      return;
+    }
     switch (msg.type) {
       case 'room_created':
         document.getElementById('room-code').textContent = msg.code;
         break;
       case 'matched':
         onlineMode = true;
+        isHost = msg.role === 'host';
         rngState = msg.seed || 1;
         // Återskapa stjärnor med seedad slump så båda ser samma
         bgStars = null;
         document.getElementById('menu').classList.add('hidden');
         document.getElementById('connect-status').classList.remove('hidden');
         document.getElementById('connect-status').textContent =
-          '🟢 Connected — ' + (msg.role === 'host' ? 'P1 (cyan)' : 'P2 (red)');
+          '🟢 Connected — YOU (cyan) · ' + (msg.role === 'host' ? 'HOST' : 'JOIN');
         document.getElementById('ctrl-hint').textContent = 'YOU: A/D · W · Space · X';
         resetGame();
         break;
       case 'opponent_input':
-        if (msg.state) {
+        if (isValidRemoteState(msg.state)) {
           const s = msg.state;
+          const opponentWasAlive = p2.alive;
           p2.x = s.x; p2.y = s.y; p2.vx = s.vx; p2.vy = s.vy; p2.angle = s.angle;
-          p2.alive = s.alive;
-          if (typeof s.hp === 'number') p2.hp = s.hp;
-          if (typeof s.score === 'number') p2.score = s.score;
-          if (typeof s.fuel === 'number') p2.fuel = s.fuel;
+          p2.alive = s.alive !== false;
+          if (typeof s.hp === 'number') p2.hp = clamp(s.hp, 0, p2.maxHp);
+          if (typeof s.score === 'number') p2.score = Math.max(0, Math.floor(s.score));
+          if (typeof s.fuel === 'number') p2.fuel = clamp(s.fuel, 0, MAX_FUEL);
           p2.thrusting = s.thrusting || false;
           // P2 trail i online
           p2.trail = p2.trail || [];
           p2.trail.push({x: p2.x, y: p2.y});
           if (p2.trail.length > 40) p2.trail.shift();
+          if (opponentWasAlive && !p2.alive && !gameOver) {
+            p1.score++;
+            endRound();
+          }
           // Ta emot laser-träff(ar) — applicera skada på vår P1
-          if (s.laserHit && p1.alive) {
-            for (let i=0; i<Math.min(s.laserHit, 10); i++) {
+          const laserHits = Math.max(0, Math.min(10, Math.floor(s.laserHit || 0)));
+          if (laserHits && p1.alive && p1.invuln <= 0) {
+            for (let i=0; i<laserHits; i++) {
               p1.hp -= 2;
               explode(p1.x, p1.y, p2.color, 6);
               if (p1.hp <= 0) { p1.alive = false; explode(p1.x,p1.y,p1.color,25); p2.score++; if(!gameOver)endRound(); break; }
@@ -151,14 +168,16 @@ function connectWs(onOpen) {
           }
           // Ersätt P2:s torpeder med mottagna
           torps = torps.filter(t => t.owner !== p2);
-          if (s.torps) s.torps.forEach(t => {
-            torps.push({ x: t.x, y: t.y, vx: t.vx, vy: t.vy, life: t.life, owner: p2 });
+          if (Array.isArray(s.torps)) s.torps.slice(0, 40).forEach(t => {
+            if (isFiniteNumber(t.x) && isFiniteNumber(t.y) && isFiniteNumber(t.vx) && isFiniteNumber(t.vy) && isFiniteNumber(t.life) && t.life > 0) {
+              torps.push({ x: t.x, y: t.y, vx: t.vx, vy: t.vy, life: Math.min(t.life, TORP_LIFE), owner: p2 });
+            }
           });
         }
         break;
       case 'opponent_disconnected':
         document.getElementById('connect-status').textContent = '🔴 Opponent disconnected';
-        ws = null; onlineMode = false;
+        ws = null; onlineMode = false; isHost = false;
         setTimeout(() => { document.getElementById('menu').classList.remove('hidden'); }, 2000);
         break;
       case 'pong': break;
@@ -167,12 +186,34 @@ function connectWs(onOpen) {
         break;
     }
   };
-  ws.onclose = () => {
+  socket.onerror = () => {
+    if (ws !== socket) return;
+    document.getElementById('join-error').textContent = 'Connection failed';
+  };
+  socket.onclose = () => {
+    if (ws !== socket) return;
+    ws = null;
     if (onlineMode) {
       document.getElementById('connect-status').textContent = '🔴 Disconnected';
       onlineMode = false;
+      isHost = false;
     }
   };
+}
+
+function isFiniteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function isValidRemoteState(s) {
+  return !!s && typeof s === 'object'
+    && isFiniteNumber(s.x) && isFiniteNumber(s.y)
+    && isFiniteNumber(s.vx) && isFiniteNumber(s.vy)
+    && isFiniteNumber(s.angle);
 }
 
 function sendInput() {
@@ -195,6 +236,7 @@ function sendInput() {
 // ── Menu handlers ──
 function startLocal() {
   onlineMode = false;
+  isHost = false;
   p2Human = false;
   document.getElementById('menu').classList.add('hidden');
   document.getElementById('ctrl-hint').textContent = 'P1: A/D · W · Space · X  |  P2: J/L · I · K · U';
@@ -226,6 +268,7 @@ function backToMenu() {
   document.getElementById('menu-join').classList.add('hidden');
   if (ws) { ws.close(); ws = null; }
   onlineMode = false;
+  isHost = false;
 }
 
 // ── Audio ──
@@ -311,10 +354,12 @@ function resetGame() {
   gameOver = false; goTimer = 0; last = performance.now();
   p2Human = false;
   const s1 = p1 ? p1.score : 0, s2 = p2 ? p2.score : 0;
-  p1 = makeShip(450 + ORBIT_R, 350, -Math.PI/2, '#0ff', 'P1');
-  p1.vx = 0; p1.vy = -orbitVel(ORBIT_R); p1.score = s1;
-  p2 = makeShip(450 - ORBIT_R, 350, Math.PI/2, '#f44', 'P2');
-  p2.vx = 0; p2.vy = orbitVel(ORBIT_R); p2.score = s2;
+  // I online-läge: host spawnar sin P1 höger, guest spawnar sin P1 vänster
+  const side = onlineMode ? (isHost ? 1 : -1) : 1;
+  p1 = makeShip(450 + ORBIT_R * side, 350, -Math.PI/2 * side, '#0ff', 'P1');
+  p1.vx = 0; p1.vy = -orbitVel(ORBIT_R) * side; p1.score = s1;
+  p2 = makeShip(450 - ORBIT_R * side, 350, Math.PI/2 * side, '#f44', 'P2');
+  p2.vx = 0; p2.vy = orbitVel(ORBIT_R) * side; p2.score = s2;
   torps = []; debris = []; comets = []; flashTimer = 0; starAngle = 0;
 
   if (!bgStars) {
@@ -431,10 +476,11 @@ function endRound() {
 
 function resetRound() {
   const s1 = p1.score, s2 = p2.score;
-  p1 = makeShip(450+ORBIT_R, 350, -Math.PI/2, '#0ff', 'P1');
-  p1.vx = 0; p1.vy = -orbitVel(ORBIT_R); p1.score = s1;
-  p2 = makeShip(450-ORBIT_R, 350, Math.PI/2, '#f44', 'P2');
-  p2.vx = 0; p2.vy = orbitVel(ORBIT_R); p2.score = s2;
+  const side = onlineMode ? (isHost ? 1 : -1) : 1;
+  p1 = makeShip(450 + ORBIT_R * side, 350, -Math.PI/2 * side, '#0ff', 'P1');
+  p1.vx = 0; p1.vy = -orbitVel(ORBIT_R) * side; p1.score = s1;
+  p2 = makeShip(450 - ORBIT_R * side, 350, Math.PI/2 * side, '#f44', 'P2');
+  p2.vx = 0; p2.vy = orbitVel(ORBIT_R) * side; p2.score = s2;
   torps = []; debris = []; p2Human = false; gameOver = false; accumulator = 0; last = performance.now();
 }
 

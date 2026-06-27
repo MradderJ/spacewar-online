@@ -48,6 +48,7 @@ const wss = new WebSocket.Server({ server });
 // Room management
 const rooms = {};
 const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const MAX_MESSAGE_SIZE = 12000;
 
 function generateRoomCode() {
   let code;
@@ -60,11 +61,34 @@ function generateRoomCode() {
   return code;
 }
 
+function closeRoom(code, closingWs = null) {
+  const room = rooms[code];
+  if (!room) return;
+  const peers = [room.host, room.guest].filter(Boolean);
+  for (const peer of peers) {
+    if (peer !== closingWs) {
+      safeSend(peer, JSON.stringify({ type: 'opponent_disconnected' }));
+    }
+  }
+  delete rooms[code];
+  console.log(`Room ${code} closed`);
+}
+
+function isRelayableState(state) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return false;
+  for (const key of ['x', 'y', 'vx', 'vy', 'angle']) {
+    if (typeof state[key] !== 'number' || !Number.isFinite(state[key])) return false;
+  }
+  if (state.torps && (!Array.isArray(state.torps) || state.torps.length > 40)) return false;
+  return true;
+}
+
 wss.on('connection', (ws) => {
   let playerRoom = null;
   let playerRole = null;
 
   ws.on('message', (raw) => {
+    if (raw.length > MAX_MESSAGE_SIZE) return;
     let msg;
     try {
       msg = JSON.parse(raw);
@@ -75,6 +99,7 @@ wss.on('connection', (ws) => {
     switch (msg.type) {
 
       case 'host': {
+        if (playerRoom) closeRoom(playerRoom, ws);
         const code = generateRoomCode();
         rooms[code] = { host: ws, guest: null, code };
         playerRoom = code;
@@ -87,11 +112,12 @@ wss.on('connection', (ws) => {
       case 'join': {
         const code = String(msg.code || '').trim().toUpperCase();
         if (!/^[A-Z2-9]{4}$/.test(code)) {
-          ws.send(JSON.stringify({ type: 'error', message: 'Invalid room code' }));
+          safeSend(ws, JSON.stringify({ type: 'error', message: 'Invalid room code' }));
           return;
         }
         const room = rooms[code];
-        if (!room) {
+        if (!room || !room.host || room.host.readyState !== WebSocket.OPEN) {
+          if (room) delete rooms[code];
           safeSend(ws, JSON.stringify({ type: 'error', message: 'Room not found' }));
           return;
         }
@@ -99,6 +125,7 @@ wss.on('connection', (ws) => {
           safeSend(ws, JSON.stringify({ type: 'error', message: 'Room is full' }));
           return;
         }
+        if (playerRoom) closeRoom(playerRoom, ws);
         room.guest = ws;
         playerRoom = code;
         playerRole = 'guest';
@@ -113,9 +140,9 @@ wss.on('connection', (ws) => {
 
       case 'input': {
         // Forward game state to the opponent
-        if (!msg.state || typeof msg.state !== 'object') return;
+        if (!isRelayableState(msg.state)) return;
         const room = rooms[playerRoom];
-        if (!room) return;
+        if (!room || !playerRole) return;
         const target = playerRole === 'host' ? room.guest : room.host;
         if (target && target.readyState === WebSocket.OPEN) {
           safeSend(target, JSON.stringify({ type: 'opponent_input', state: msg.state }));
@@ -133,12 +160,9 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     if (playerRoom && rooms[playerRoom]) {
       const room = rooms[playerRoom];
-      const other = playerRole === 'host' ? room.guest : room.host;
-      if (other && other.readyState === WebSocket.OPEN) {
-        safeSend(other, JSON.stringify({ type: 'opponent_disconnected' }));
+      if ((playerRole === 'host' && room.host === ws) || (playerRole === 'guest' && room.guest === ws)) {
+        closeRoom(playerRoom, ws);
       }
-      delete rooms[playerRoom];
-      console.log(`Room ${playerRoom} closed`);
     }
   });
 });
